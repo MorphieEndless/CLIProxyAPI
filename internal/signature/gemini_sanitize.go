@@ -10,7 +10,8 @@ import (
 
 // geminiSanitizeOptions scopes Gemini replay policy to the upstream endpoint.
 type geminiSanitizeOptions struct {
-	rejectBareTink bool
+	rejectBareTink            bool
+	rejectUnverifiedForVertex bool
 }
 
 // GeminiReplaySignatureOrBypass returns a Gemini-replayable thoughtSignature.
@@ -31,14 +32,25 @@ func geminiReplaySignatureOrBypass(rawSignature string, blockKind SignatureBlock
 
 func geminiSanitizeDecision(rawSignature string, blockKind SignatureBlockKind, opts geminiSanitizeOptions) SignatureCompatibilityDecision {
 	decision := DecideSignatureCompatibility(SignatureProviderGemini, rawSignature, blockKind)
-	if !opts.rejectBareTink || !decision.Compatible || !IsGeminiVertexBareTinkSignature(rawSignature) {
+	if !decision.Compatible {
 		return decision
 	}
-	decision.Compatible = false
-	decision.NormalizedSignature = ""
-	decision.Action = SignatureActionReplaceWithGeminiBypass
-	decision.ReplacementSignature = GeminiSkipThoughtSignatureValidator
-	decision.Reason = "Vertex bare-Tink signature is not accepted by this Gemini endpoint"
+	if opts.rejectBareTink && IsGeminiVertexBareTinkSignature(rawSignature) {
+		decision.Compatible = false
+		decision.NormalizedSignature = ""
+		decision.Action = SignatureActionReplaceWithGeminiBypass
+		decision.ReplacementSignature = GeminiSkipThoughtSignatureValidator
+		decision.Reason = "Vertex bare-Tink signature is not accepted by this Gemini endpoint"
+		return decision
+	}
+	if opts.rejectUnverifiedForVertex && !IsCompatibleGeminiVertexSignature(rawSignature) {
+		decision.Compatible = false
+		decision.NormalizedSignature = ""
+		decision.Action = SignatureActionReplaceWithGeminiBypass
+		decision.ReplacementSignature = GeminiSkipThoughtSignatureValidator
+		decision.Reason = "non-Vertex or unverified external Gemini signature is not accepted by Vertex AI"
+		return decision
+	}
 	return decision
 }
 
@@ -51,6 +63,21 @@ func SanitizeGeminiRequestThoughtSignatures(payload []byte, contentsPath string)
 // SanitizeGeminiRequestThoughtSignaturesDoc applies Gemini replay policy onto doc in place.
 func SanitizeGeminiRequestThoughtSignaturesDoc(doc *ojson.Doc, contentsPath string) {
 	_ = sanitizeGeminiRequestThoughtSignaturesDoc(doc, contentsPath, geminiSanitizeOptions{})
+}
+
+// SanitizeVertexGeminiRequestThoughtSignatures applies Gemini replay policy for
+// Vertex AI endpoints, preserving Vertex bare-Tink signatures and signatures
+// previously emitted by Vertex AI on this instance while replacing unverified
+// foreign/non-Vertex signatures (such as external proxy, AI Studio, Gemini API,
+// or Antigravity protobuf_field_2 signatures) with the bypass sentinel.
+func SanitizeVertexGeminiRequestThoughtSignatures(payload []byte, contentsPath string) []byte {
+	return sanitizeGeminiRequestThoughtSignatures(payload, contentsPath, geminiSanitizeOptions{rejectUnverifiedForVertex: true})
+}
+
+// SanitizeVertexGeminiRequestThoughtSignaturesDoc applies Vertex AI Gemini
+// signature sanitization onto doc in place.
+func SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc *ojson.Doc, contentsPath string) {
+	_ = sanitizeGeminiRequestThoughtSignaturesDoc(doc, contentsPath, geminiSanitizeOptions{rejectUnverifiedForVertex: true})
 }
 
 // SanitizeNonVertexGeminiRequestThoughtSignatures applies the same policy for
