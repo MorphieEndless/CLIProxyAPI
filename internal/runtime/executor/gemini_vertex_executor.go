@@ -456,7 +456,7 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 
 		fixGeminiImageAspectRatioDoc(baseModel, doc)
 		helps.SetStringIfDifferentDoc(doc, "model", baseModel)
-		internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+		internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 	}
 
 	action := getVertexAction(baseModel, false)
@@ -473,10 +473,14 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 	replayScope := antigravityReasoningReplayScope{}
 	var replayRequestPayload []byte
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
+		var changedReplay bool
 		var errReplay error
-		replayScope, replayRequestPayload, _, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
+		replayScope, replayRequestPayload, changedReplay, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
 		if errReplay != nil {
 			return resp, errReplay
+		}
+		if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	if !isImagenModel(baseModel) {
@@ -586,6 +590,7 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 			reporter.PublishFailureWithDetail(ctx, gemDetail, err)
 			return cliproxyexecutor.Response{}, err
 		}
+		internalsignature.RecordGeminiVertexThoughtSignaturesFromResponse(data)
 		cacheAntigravityReasoningReplayFromResponse(ctx, replayScope, replayRequestPayload, data)
 	}
 	to := sdktranslator.FromString("gemini")
@@ -640,7 +645,7 @@ func (e *GeminiVertexExecutor) executeWithAPIKey(ctx context.Context, auth *clip
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
-	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+	internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 
 	action := getVertexAction(baseModel, false)
 	if req.Metadata != nil {
@@ -656,10 +661,14 @@ func (e *GeminiVertexExecutor) executeWithAPIKey(ctx context.Context, auth *clip
 	replayScope := antigravityReasoningReplayScope{}
 	var replayRequestPayload []byte
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
+		var changedReplay bool
 		var errReplay error
-		replayScope, replayRequestPayload, _, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
+		replayScope, replayRequestPayload, changedReplay, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
 		if errReplay != nil {
 			return resp, errReplay
+		}
+		if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	helps.StripVertexOpenAIResponsesToolCallIDsDoc(doc, from.String())
@@ -758,6 +767,7 @@ func (e *GeminiVertexExecutor) executeWithAPIKey(ctx context.Context, auth *clip
 			reporter.PublishFailureWithDetail(ctx, gemDetail, err)
 			return cliproxyexecutor.Response{}, err
 		}
+		internalsignature.RecordGeminiVertexThoughtSignaturesFromResponse(data)
 		cacheAntigravityReasoningReplayFromResponse(ctx, replayScope, replayRequestPayload, data)
 	}
 	var param any
@@ -811,7 +821,7 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
-	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+	internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 
 	action := getVertexAction(baseModel, true)
 	helps.DropGeminiTrailingThoughtOnlyContentDoc(doc, "contents")
@@ -819,10 +829,14 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	replayScope := antigravityReasoningReplayScope{}
 	var replayRequestPayload []byte
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
+		var changedReplay bool
 		var errReplay error
-		replayScope, replayRequestPayload, _, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
+		replayScope, replayRequestPayload, changedReplay, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
 		if errReplay != nil {
 			return nil, errReplay
+		}
+		if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	helps.StripVertexOpenAIResponsesToolCallIDsDoc(doc, from.String())
@@ -998,6 +1012,7 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 			}
 			reporter.ObserveResponseModel(line)
 			rawPayload := helps.JSONPayload(line)
+			internalsignature.RecordGeminiVertexThoughtSignaturesFromResponse(rawPayload)
 			if len(rawPayload) > 0 && len(pendingFilterLine) > 0 {
 				flushed := pendingFilterLine
 				pendingFilterLine = nil
@@ -1176,7 +1191,7 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
-	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+	internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 
 	action := getVertexAction(baseModel, true)
 	helps.DropGeminiTrailingThoughtOnlyContentDoc(doc, "contents")
@@ -1184,10 +1199,14 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 	replayScope := antigravityReasoningReplayScope{}
 	var replayRequestPayload []byte
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
+		var changedReplay bool
 		var errReplay error
-		replayScope, replayRequestPayload, _, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
+		replayScope, replayRequestPayload, changedReplay, errReplay = prepareGeminiTopLevelReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc)
 		if errReplay != nil {
 			return nil, errReplay
+		}
+		if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	helps.StripVertexOpenAIResponsesToolCallIDsDoc(doc, from.String())
@@ -1360,6 +1379,7 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 			}
 			reporter.ObserveResponseModel(line)
 			rawPayload := helps.JSONPayload(line)
+			internalsignature.RecordGeminiVertexThoughtSignaturesFromResponse(rawPayload)
 			if len(rawPayload) > 0 && len(pendingFilterLine) > 0 {
 				flushed := pendingFilterLine
 				pendingFilterLine = nil
@@ -1535,11 +1555,13 @@ func (e *GeminiVertexExecutor) countTokensWithServiceAccount(ctx context.Context
 	_ = doc.Delete("tools")
 	_ = doc.Delete("generationConfig")
 	_ = doc.Delete("safetySettings")
-	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+	internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 	helps.EnsureGeminiLeadingUserContentDoc(doc, "contents")
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
-		if _, errReplay := prepareGeminiTopLevelCountTokensReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc); errReplay != nil {
+		if changedReplay, errReplay := prepareGeminiTopLevelCountTokensReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc); errReplay != nil {
 			return cliproxyexecutor.Response{}, errReplay
+		} else if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	helps.StripVertexOpenAIResponsesToolCallIDsDoc(doc, from.String())
@@ -1647,11 +1669,13 @@ func (e *GeminiVertexExecutor) countTokensWithAPIKey(ctx context.Context, auth *
 	_ = doc.Delete("tools")
 	_ = doc.Delete("generationConfig")
 	_ = doc.Delete("safetySettings")
-	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
+	internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 	helps.EnsureGeminiLeadingUserContentDoc(doc, "contents")
 	if !isImagenModel(baseModel) && antigravityUsesReasoningReplayCache(baseModel) {
-		if _, errReplay := prepareGeminiTopLevelCountTokensReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc); errReplay != nil {
+		if changedReplay, errReplay := prepareGeminiTopLevelCountTokensReasoningReplayPayloadDoc(ctx, baseModel, req, opts, doc); errReplay != nil {
 			return cliproxyexecutor.Response{}, errReplay
+		} else if changedReplay {
+			internalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 		}
 	}
 	helps.StripVertexOpenAIResponsesToolCallIDsDoc(doc, from.String())
