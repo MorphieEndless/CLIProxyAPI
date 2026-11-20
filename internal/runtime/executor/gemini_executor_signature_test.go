@@ -551,6 +551,84 @@ func TestGeminiVertexExecutorCountTokens_GeminiPayload_SanitizesClaudeCAISSignat
 }
 
 func TestGeminiVertexExecutorExecute_PreservesNativeGeminiSignature(t *testing.T) {
+	recordedVertexProtobufSig := testForeignProtobufField2Signature([4]byte{0x11, 0x22, 0x33, 0x44})
+	internalsignature.RecordGeminiVertexIssuedSignature(recordedVertexProtobufSig)
+
+	for _, tc := range []struct {
+		name string
+		sig  string
+	}{
+		{name: "vertex_bare_tink", sig: testVertexBareTinkSignature()},
+		{name: "recorded_vertex_protobuf_field_2", sig: recordedVertexProtobufSig},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var upstreamBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, errRead := io.ReadAll(r.Body)
+				if errRead != nil {
+					t.Fatalf("read request body: %v", errRead)
+				}
+				upstreamBody = append([]byte(nil), body...)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+			}))
+			defer server.Close()
+
+			executor := NewGeminiVertexExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{
+				Provider: "vertex",
+				Attributes: map[string]string{
+					"api_key":  "test-vertex-key",
+					"base_url": server.URL,
+				},
+			}
+
+			reqPayload := []byte(`{
+				"contents": [
+					{
+						"role": "model",
+						"parts": [
+							{
+								"functionCall": {"name": "search", "args": {"q": "go"}},
+								"thoughtSignature": "` + tc.sig + `"
+							}
+						]
+					},
+					{
+						"role": "user",
+						"parts": [
+							{
+								"functionResponse": {"name": "search", "response": {"result": "found"}}
+							}
+						]
+					}
+				]
+			}`)
+
+			req := cliproxyexecutor.Request{
+				Model:   "gemini-2.5-flash",
+				Payload: reqPayload,
+			}
+
+			opts := cliproxyexecutor.Options{
+				SourceFormat: sdktranslator.FormatGemini,
+			}
+
+			_, err := executor.Execute(context.Background(), auth, req, opts)
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+
+			gotSig := ojson.GetBytes(upstreamBody, "contents.1.parts.0.thoughtSignature").String()
+			if gotSig != tc.sig {
+				t.Fatalf("thoughtSignature = %q, want preserved Vertex signature %q; upstreamBody=%s",
+					gotSig, tc.sig, upstreamBody)
+			}
+		})
+	}
+}
+
+func TestGeminiVertexExecutorExecute_ReplacesUnverifiedNonVertexGeminiSignatureWithBypass(t *testing.T) {
 	var upstreamBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, errRead := io.ReadAll(r.Body)
@@ -563,7 +641,7 @@ func TestGeminiVertexExecutorExecute_PreservesNativeGeminiSignature(t *testing.T
 	}))
 	defer server.Close()
 
-	nativeSig := testNativeGemini3ThoughtSignature()
+	unverifiedSig := testNativeGemini3ThoughtSignature()
 	executor := NewGeminiVertexExecutor(&config.Config{})
 	auth := &cliproxyauth.Auth{
 		Provider: "vertex",
@@ -580,7 +658,7 @@ func TestGeminiVertexExecutorExecute_PreservesNativeGeminiSignature(t *testing.T
 				"parts": [
 					{
 						"functionCall": {"name": "search", "args": {"q": "go"}},
-						"thoughtSignature": "` + nativeSig + `"
+						"thoughtSignature": "` + unverifiedSig + `"
 					}
 				]
 			},
@@ -610,9 +688,9 @@ func TestGeminiVertexExecutorExecute_PreservesNativeGeminiSignature(t *testing.T
 	}
 
 	gotSig := ojson.GetBytes(upstreamBody, "contents.1.parts.0.thoughtSignature").String()
-	if gotSig != nativeSig {
-		t.Fatalf("thoughtSignature = %q, want preserved native signature %q; upstreamBody=%s",
-			gotSig, nativeSig, upstreamBody)
+	if gotSig != internalsignature.GeminiSkipThoughtSignatureValidator {
+		t.Fatalf("thoughtSignature = %q, want bypass sentinel %q for unverified foreign Gemini signature; upstreamBody=%s",
+			gotSig, internalsignature.GeminiSkipThoughtSignatureValidator, upstreamBody)
 	}
 }
 
