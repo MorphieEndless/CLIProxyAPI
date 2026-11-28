@@ -51,11 +51,9 @@ new_replay_stream = """\tif !isImagenModel(baseModel) && antigravityUsesReasonin
 \t\t\treturn nil, errReplay
 \t\t}
 \t\tif changedReplay {
-\t\t\tinternalsignature.RecordGeminiVertexThoughtSignaturesFromResponsePLACEHOLDER
+\t\t\tinternalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")
 \t\t}
 \t}"""
-# (stream block identical to nonstream except return nil; placeholder never matches - replaced below)
-new_replay_stream = new_replay_stream.replace("\t\t\tinternalsignature.RecordGeminiVertexThoughtSignaturesFromResponsePLACEHOLDER\n", "\t\t\tinternalsignature.SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, \"contents\")\n")
 assert text.count(old_replay_stream) == 2, f"Expected 2 stream replay blocks, found {text.count(old_replay_stream)}"
 text = text.replace(old_replay_stream, new_replay_stream)
 
