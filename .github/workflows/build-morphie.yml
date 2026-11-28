@@ -1,0 +1,130 @@
+name: Build CPA Linux (Morphie Patch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Upstream CLIProxyAPI tag to build on'
+        required: true
+        default: 'v8.1.8'
+  push:
+    branches:
+      - "patch/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-morphie-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.26.10'
+  UPSTREAM_TAG: ${{ github.event.inputs.upstream_tag || 'v8.1.8' }}
+  RELEASE_VERSION: '8.1.8-morphie.1'
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: overlay
+      - name: Clone upstream CLIProxyAPI at pinned tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${UPSTREAM_TAG}" https://github.com/router-for-me/CLIProxyAPI.git src
+      - name: Overlay Morphie patch payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLDBRANCH="patch/vertex-thought-signature"
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}"
+          # v8.1.8 adapted files live in this branch payload
+          cp overlay/.github/patch-payload/gemini_sanitize.go src/internal/signature/gemini_sanitize.go
+          cp overlay/.github/patch-payload/apply-vertex-sig-patch.py src/patch-check.py
+          # files identical to the original patch branch are pulled as raw blobs
+          curl -fsSL "${RAW}/${OLDBRANCH}/internal/signature/vertex_provenance.go" -o src/internal/signature/vertex_provenance.go
+          curl -fsSL "${RAW}/${OLDBRANCH}/internal/signature/vertex_provenance_test.go" -o src/internal/signature/vertex_provenance_test.go
+          curl -fsSL "${RAW}/${OLDBRANCH}/internal/runtime/executor/gemini_executor_signature_test.go" -o src/internal/runtime/executor/gemini_executor_signature_test.go
+          curl -fsSL "${RAW}/${OLDBRANCH}/internal/runtime/executor/gemini_vertex_bare_tink_signature_test.go" -o src/internal/runtime/executor/gemini_vertex_bare_tink_signature_test.go
+          cd src
+          # executor wiring is applied idempotently by the patch script
+          python3 patch-check.py
+          grep -c 'SanitizeVertexGeminiRequestThoughtSignaturesDoc(doc, "contents")' internal/runtime/executor/gemini_vertex_executor.go
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Run signature and Vertex executor tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src
+          go vet ./internal/signature/... ./internal/runtime/executor/...
+          go test ./internal/signature/...
+          go test ./internal/runtime/executor -run 'Test.*Vertex.*|TestGeminiExecutorReplacesVertexBareTinkSignature|TestAntigravityExecutorReplacesVertexBareTinkSignature|TestAntigravityReasoningReplay.*'
+      - name: Build Linux amd64 glibc binary (plugin-enabled)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src
+          COMMIT="${UPSTREAM_TAG}+morphie.1"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist/archive
+
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            -e GO_VERSION="${GO_VERSION}" \
+            -e RELEASE_VERSION="${RELEASE_VERSION}" \
+            -e COMMIT="${COMMIT}" \
+            -e BUILD_DATE="${BUILD_DATE}" \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -euo pipefail -c '
+              go_archive="go${GO_VERSION}.linux-amd64.tar.gz"
+              curl -fsSL "https://go.dev/dl/${go_archive}" -o "/tmp/${go_archive}"
+              rm -rf /usr/local/go
+              tar -C /usr/local -xzf "/tmp/${go_archive}"
+              export PATH="/usr/local/go/bin:${PATH}"
+
+              CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildvcs=false \
+                -ldflags="-s -w -X main.Version=${RELEASE_VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
+                -o dist/archive/cli-proxy-api ./cmd/server/
+
+              glibc_versions="$(readelf --version-info dist/archive/cli-proxy-api | sed -n "s/.*Name: GLIBC_\([0-9.]*\).*/\1/p" | sort -Vu)"
+              if [[ -n "${glibc_versions}" ]]; then
+                printf "GLIBC versions:\n%s\n" "${glibc_versions}"
+                max_glibc="$(printf "%s\n" "${glibc_versions}" | sort -V | tail -n 1)"
+                if [[ "$(printf "2.17\n%s\n" "${max_glibc}" | sort -V | tail -n 1)" != "2.17" ]]; then
+                  printf "linux amd64 binary requires GLIBC_%s, expected GLIBC_2.17 or older\n" "${max_glibc}" >&2
+                  exit 1
+                fi
+              fi
+            '
+
+          cp LICENSE README.md README_CN.md config.example.yaml dist/archive/
+          tar -C dist/archive -czf dist/CLIProxyAPI_morphie_linux_amd64.tar.gz cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
+          sha256sum dist/archive/cli-proxy-api dist/CLIProxyAPI_morphie_linux_amd64.tar.gz | tee dist/checksums.txt
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-proxy-api-linux-amd64
+          path: |
+            src/dist/CLIProxyAPI_morphie_linux_amd64.tar.gz
+            src/dist/checksums.txt
+      - name: Publish rolling release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: morphie-latest
+          name: Morphie Patched CLIProxyAPI (v8.1.8 + Vertex ThoughtSignature Fix)
+          body: |
+            Patched build of `CLIProxyAPI` v8.1.8 with B1 Vertex `thoughtSignature` key-domain sanitization + Vertex outbound signature provenance tracking.
+            v8.1.8 already includes the upstream fix for Devin Gemini thought-signature replay (#7842).
+          files: |
+            src/dist/CLIProxyAPI_morphie_linux_amd64.tar.gz
+            src/dist/checksums.txt
+          prerelease: true
+          make_latest: false
